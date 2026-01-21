@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DanceMap</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        header {
+            background-color: #f5f5dc;
+            padding: 15px 20px;
+            border-bottom: 1px solid #ccc;
+        }
+
+        header h1 {
+            font-size: 24px;
+            color: #333;
+        }
+
+        .container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .floor-panel {
+            padding: 20px;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            background-color: #f0f0f0;
+        }
+
+        #floorCanvas {
+            border: 2px solid #333;
+        }
+
+        .notes-panel {
+            flex: 1;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            background-color: #fff;
+        }
+
+        .notes-panel h2 {
+            margin-bottom: 10px;
+            font-size: 18px;
+            color: #333;
+        }
+
+        #notesInput {
+            flex: 1;
+            width: 100%;
+            padding: 10px;
+            font-family: monospace;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            resize: none;
+        }
+
+        #notesInput:focus {
+            outline: 2px solid #666;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>DanceMap</h1>
+    </header>
+    <div class="container">
+        <div class="floor-panel">
+            <canvas id="floorCanvas" width="400" height="600"></canvas>
+        </div>
+        <div class="notes-panel">
+            <h2>Notes</h2>
+            <textarea id="notesInput" placeholder="Enter positions: x, y, direction&#10;Example: 200, 300, N"></textarea>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('floorCanvas');
+        const ctx = canvas.getContext('2d');
+        const notesInput = document.getElementById('notesInput');
+
+        const CANVAS_WIDTH = 400;
+        const CANVAS_HEIGHT = 600;
+        const TOKEN_RADIUS = 20;
+        const ARROW_LENGTH = 12;
+
+        const VALID_DIRECTIONS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+
+        const DIRECTION_ANGLES = {
+            'N': -Math.PI / 2,
+            'NE': -Math.PI / 4,
+            'E': 0,
+            'SE': Math.PI / 4,
+            'S': Math.PI / 2,
+            'SW': 3 * Math.PI / 4,
+            'W': Math.PI,
+            'NW': -3 * Math.PI / 4
+        };
+
+        // Track the currently dragged token
+        let draggedToken = null;
+        let currentTokens = [];
+
+        function parseNotes(text) {
+            const lines = text.split('\n');
+            const tokens = [];
+
+            lines.forEach((line, index) => {
+                const lineNumber = index + 1;
+                const parts = line.split(',').map(p => p.trim());
+
+                if (parts.length !== 3) return;
+
+                const x = parseInt(parts[0], 10);
+                const y = parseInt(parts[1], 10);
+                const direction = parts[2].toUpperCase();
+
+                if (isNaN(x) || isNaN(y) || x < 0 || y < 0) return;
+                if (!VALID_DIRECTIONS.includes(direction)) return;
+
+                tokens.push({ x, y, direction, lineNumber });
+            });
+
+            return tokens;
+        }
+
+        function transformY(y) {
+            return CANVAS_HEIGHT - y;
+        }
+
+        function inverseTransformY(canvasY) {
+            return CANVAS_HEIGHT - canvasY;
+        }
+
+        function drawFloor() {
+            ctx.fillStyle = '#808080';
+            ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+        }
+
+        function drawToken(token, isSelected) {
+            const canvasX = token.x;
+            const canvasY = transformY(token.y);
+
+            // Draw circle
+            ctx.beginPath();
+            ctx.arc(canvasX, canvasY, TOKEN_RADIUS, 0, 2 * Math.PI);
+            ctx.fillStyle = isSelected ? '#ffff99' : '#fff';
+            ctx.fill();
+            ctx.strokeStyle = isSelected ? '#ff0000' : '#000';
+            ctx.lineWidth = isSelected ? 3 : 2;
+            ctx.stroke();
+
+            // Draw arrow
+            const angle = DIRECTION_ANGLES[token.direction];
+            const arrowStartX = canvasX;
+            const arrowStartY = canvasY;
+            const arrowEndX = canvasX + Math.cos(angle) * ARROW_LENGTH;
+            const arrowEndY = canvasY + Math.sin(angle) * ARROW_LENGTH;
+
+            ctx.beginPath();
+            ctx.moveTo(arrowStartX, arrowStartY);
+            ctx.lineTo(arrowEndX, arrowEndY);
+            ctx.strokeStyle = '#000';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Draw arrowhead
+            const headLength = 6;
+            const headAngle = Math.PI / 6;
+            ctx.beginPath();
+            ctx.moveTo(arrowEndX, arrowEndY);
+            ctx.lineTo(
+                arrowEndX - headLength * Math.cos(angle - headAngle),
+                arrowEndY - headLength * Math.sin(angle - headAngle)
+            );
+            ctx.moveTo(arrowEndX, arrowEndY);
+            ctx.lineTo(
+                arrowEndX - headLength * Math.cos(angle + headAngle),
+                arrowEndY - headLength * Math.sin(angle + headAngle)
+            );
+            ctx.stroke();
+
+            // Draw line number
+            ctx.fillStyle = '#000';
+            ctx.font = 'bold 12px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(token.lineNumber.toString(), canvasX, canvasY + TOKEN_RADIUS + 12);
+        }
+
+        function render() {
+            currentTokens = parseNotes(notesInput.value);
+
+            drawFloor();
+            currentTokens.forEach(token => {
+                const isSelected = draggedToken && draggedToken.lineNumber === token.lineNumber;
+                drawToken(token, isSelected);
+            });
+        }
+
+        function getCanvasCoords(event) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: event.clientX - rect.left,
+                y: event.clientY - rect.top
+            };
+        }
+
+        function findTokenAtPosition(canvasX, canvasY) {
+            // Check tokens in reverse order so topmost token is selected first
+            for (let i = currentTokens.length - 1; i >= 0; i--) {
+                const token = currentTokens[i];
+                const tokenCanvasY = transformY(token.y);
+                const dx = canvasX - token.x;
+                const dy = canvasY - tokenCanvasY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                if (distance <= TOKEN_RADIUS) {
+                    return token;
+                }
+            }
+            return null;
+        }
+
+        function updateTextareaLine(lineNumber, x, y, direction) {
+            const lines = notesInput.value.split('\n');
+            const lineIndex = lineNumber - 1;
+            if (lineIndex >= 0 && lineIndex < lines.length) {
+                lines[lineIndex] = `${x}, ${y}, ${direction}`;
+                notesInput.value = lines.join('\n');
+            }
+        }
+
+        canvas.addEventListener('mousedown', (event) => {
+            const coords = getCanvasCoords(event);
+            const token = findTokenAtPosition(coords.x, coords.y);
+            if (token) {
+                draggedToken = { ...token };
+                canvas.style.cursor = 'grabbing';
+                render();
+            }
+        });
+
+        canvas.addEventListener('mousemove', (event) => {
+            const coords = getCanvasCoords(event);
+
+            if (draggedToken) {
+                // Update dragged token position
+                const newX = Math.max(0, Math.round(coords.x));
+                const newY = Math.max(0, Math.round(inverseTransformY(coords.y)));
+
+                draggedToken.x = newX;
+                draggedToken.y = newY;
+
+                // Update the textarea
+                updateTextareaLine(draggedToken.lineNumber, newX, newY, draggedToken.direction);
+                render();
+            } else {
+                // Change cursor when hovering over a token
+                const token = findTokenAtPosition(coords.x, coords.y);
+                canvas.style.cursor = token ? 'grab' : 'default';
+            }
+        });
+
+        canvas.addEventListener('mouseup', () => {
+            if (draggedToken) {
+                draggedToken = null;
+                canvas.style.cursor = 'default';
+                render();
+            }
+        });
+
+        canvas.addEventListener('mouseleave', () => {
+            if (draggedToken) {
+                draggedToken = null;
+                canvas.style.cursor = 'default';
+                render();
+            }
+        });
+
+        notesInput.addEventListener('input', render);
+
+        // Initial render
+        render();
+    </script>
+</body>
+</html>
