@@ -99,6 +99,7 @@
         const CANVAS_HEIGHT = 600;
         const TOKEN_RADIUS = 20;
         const ARROW_LENGTH = 12;
+        const MOVE_STEP = 10;
 
         const VALID_DIRECTIONS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 
@@ -113,8 +114,9 @@
             'NW': -3 * Math.PI / 4
         };
 
-        // Track the currently dragged token
-        let draggedToken = null;
+        // Track selection and drag state separately
+        let selectedLineNumber = null;
+        let isDragging = false;
         let currentTokens = [];
 
         function parseNotes(text) {
@@ -204,12 +206,22 @@
             ctx.fillText(token.lineNumber.toString(), canvasX, canvasY + TOKEN_RADIUS + 12);
         }
 
+        function getSelectedToken() {
+            if (selectedLineNumber === null) return null;
+            return currentTokens.find(t => t.lineNumber === selectedLineNumber) || null;
+        }
+
         function render() {
             currentTokens = parseNotes(notesInput.value);
 
+            // Clear selection if the selected token no longer exists
+            if (selectedLineNumber !== null && !currentTokens.find(t => t.lineNumber === selectedLineNumber)) {
+                selectedLineNumber = null;
+            }
+
             drawFloor();
             currentTokens.forEach(token => {
-                const isSelected = draggedToken && draggedToken.lineNumber === token.lineNumber;
+                const isSelected = token.lineNumber === selectedLineNumber;
                 drawToken(token, isSelected);
             });
         }
@@ -246,30 +258,74 @@
             }
         }
 
+        function rotateDirection(currentDirection, clockwise) {
+            const index = VALID_DIRECTIONS.indexOf(currentDirection);
+            if (index === -1) return currentDirection;
+            const newIndex = clockwise
+                ? (index + 1) % VALID_DIRECTIONS.length
+                : (index - 1 + VALID_DIRECTIONS.length) % VALID_DIRECTIONS.length;
+            return VALID_DIRECTIONS[newIndex];
+        }
+
+        function selectNextToken(forward) {
+            if (currentTokens.length === 0) return;
+
+            if (selectedLineNumber === null) {
+                // Select first token if nothing selected
+                selectedLineNumber = currentTokens[0].lineNumber;
+            } else {
+                // Find current index in tokens array
+                const currentIndex = currentTokens.findIndex(t => t.lineNumber === selectedLineNumber);
+                if (currentIndex === -1) {
+                    selectedLineNumber = currentTokens[0].lineNumber;
+                } else {
+                    // Move to next/previous with circular wrap
+                    const newIndex = forward
+                        ? (currentIndex + 1) % currentTokens.length
+                        : (currentIndex - 1 + currentTokens.length) % currentTokens.length;
+                    selectedLineNumber = currentTokens[newIndex].lineNumber;
+                }
+            }
+            render();
+        }
+
+        // Mouse events
         canvas.addEventListener('mousedown', (event) => {
             const coords = getCanvasCoords(event);
             const token = findTokenAtPosition(coords.x, coords.y);
+
             if (token) {
-                draggedToken = { ...token };
-                canvas.style.cursor = 'grabbing';
+                if (selectedLineNumber === token.lineNumber) {
+                    // Clicking on already selected token - start dragging
+                    isDragging = true;
+                    canvas.style.cursor = 'grabbing';
+                } else {
+                    // Clicking on a different token - select it
+                    selectedLineNumber = token.lineNumber;
+                    isDragging = true;
+                    canvas.style.cursor = 'grabbing';
+                }
                 render();
+            } else {
+                // Clicking on empty space - deselect
+                if (selectedLineNumber !== null) {
+                    selectedLineNumber = null;
+                    render();
+                }
             }
         });
 
         canvas.addEventListener('mousemove', (event) => {
             const coords = getCanvasCoords(event);
 
-            if (draggedToken) {
-                // Update dragged token position
-                const newX = Math.max(0, Math.round(coords.x));
-                const newY = Math.max(0, Math.round(inverseTransformY(coords.y)));
-
-                draggedToken.x = newX;
-                draggedToken.y = newY;
-
-                // Update the textarea
-                updateTextareaLine(draggedToken.lineNumber, newX, newY, draggedToken.direction);
-                render();
+            if (isDragging && selectedLineNumber !== null) {
+                const token = getSelectedToken();
+                if (token) {
+                    const newX = Math.max(0, Math.round(coords.x));
+                    const newY = Math.max(0, Math.round(inverseTransformY(coords.y)));
+                    updateTextareaLine(token.lineNumber, newX, newY, token.direction);
+                    render();
+                }
             } else {
                 // Change cursor when hovering over a token
                 const token = findTokenAtPosition(coords.x, coords.y);
@@ -278,17 +334,63 @@
         });
 
         canvas.addEventListener('mouseup', () => {
-            if (draggedToken) {
-                draggedToken = null;
-                canvas.style.cursor = 'default';
-                render();
-            }
+            isDragging = false;
+            const coords = { x: -1, y: -1 }; // Will result in no token found
+            canvas.style.cursor = 'default';
         });
 
         canvas.addEventListener('mouseleave', () => {
-            if (draggedToken) {
-                draggedToken = null;
-                canvas.style.cursor = 'default';
+            isDragging = false;
+            canvas.style.cursor = 'default';
+        });
+
+        // Keyboard events
+        document.addEventListener('keydown', (event) => {
+            // Don't intercept keys when typing in textarea
+            if (document.activeElement === notesInput) {
+                return;
+            }
+
+            const token = getSelectedToken();
+
+            // Tab / Shift+Tab for cycling selection
+            if (event.key === 'Tab') {
+                event.preventDefault();
+                selectNextToken(!event.shiftKey);
+                return;
+            }
+
+            // Arrow keys require a selected token
+            if (!token) return;
+
+            // Shift+Arrow for rotation
+            if (event.shiftKey && (event.key === 'ArrowRight' || event.key === 'ArrowLeft')) {
+                event.preventDefault();
+                const clockwise = event.key === 'ArrowRight';
+                const newDirection = rotateDirection(token.direction, clockwise);
+                updateTextareaLine(token.lineNumber, token.x, token.y, newDirection);
+                render();
+                return;
+            }
+
+            // Arrow keys for movement
+            if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.key)) {
+                event.preventDefault();
+                let newX = token.x;
+                let newY = token.y;
+
+                switch (event.key) {
+                    case 'ArrowUp':    newY += MOVE_STEP; break;
+                    case 'ArrowDown':  newY -= MOVE_STEP; break;
+                    case 'ArrowLeft':  newX -= MOVE_STEP; break;
+                    case 'ArrowRight': newX += MOVE_STEP; break;
+                }
+
+                // Clamp to non-negative values
+                newX = Math.max(0, newX);
+                newY = Math.max(0, newY);
+
+                updateTextareaLine(token.lineNumber, newX, newY, token.direction);
                 render();
             }
         });
